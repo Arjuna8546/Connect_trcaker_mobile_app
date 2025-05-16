@@ -1,13 +1,20 @@
 import { TextInput } from 'react-native';
-import React from 'react';
 
-export default function InputFeildComponent({ label, keyboardType = "default", secureTextEntry = false }) {
+export default function InputFeildComponent({ 
+  label, 
+  keyboardType = "default", 
+  secureTextEntry = false,
+  value,
+  onChangeText
+}) {
   return (
     <TextInput
       placeholder={label}
       keyboardType={keyboardType}
       secureTextEntry={secureTextEntry}
       placeholderTextColor="#888"
+      value={value}
+      onChangeText={onChangeText}
       style={{
         color: "white",
         borderColor: "#555",

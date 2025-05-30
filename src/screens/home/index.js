@@ -1,6 +1,6 @@
 
 import React, { useEffect, useRef, useState } from 'react';
-import { Button, StyleSheet, Text, View, TouchableOpacity,Image } from 'react-native';
+import { Button, ScrollView, StyleSheet, Text, View, TouchableOpacity, Image, Alert } from 'react-native';
 import BackgroundJob from 'react-native-background-actions';
 import Geolocation from 'react-native-geolocation-service';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -13,11 +13,15 @@ import {
     backgroundNotificationOption
 } from '../../utils/location';
 import axiosInstance from '../../axiosInstance/axiosInstance';
+import { HTTP_BACKEND_URL,WS_BACKEND_URL } from '@env';
 
-export default function HomeScreen({navigation}) {
+export default function HomeScreen({ navigation }) {
     const watchId = useRef(null);
     const [isTracking, setIsTracking] = useState(false);
     const [user, setUserData] = useState(null)
+    const [rides, setRides] = useState([]);
+    const [selectedRide, setSelectedRide] = useState(null);
+    const ws = useRef(null);
 
     //notification
     async function createAndroidChannel() {
@@ -40,11 +44,23 @@ export default function HomeScreen({navigation}) {
     const logout = async () => {
         await AsyncStorage.removeItem('user');
         navigation.replace('signin'); // or navigate to your login screen
+
     };
 
-    const getRides = async (user_id) =>{
-        const response = await axiosInstance.get(`http://192.168.44.253:8000/api/mobile/rides/${user_id}`)
-        console.log(response?.data)
+    const getRides = async (user_id) => {
+        try {
+            const response = await axiosInstance.get(`${HTTP_BACKEND_URL}/api/mobile/rides/${user_id}`);
+            const rideData = response?.data.rides;
+            if (Array.isArray(rideData)) {
+                setRides(rideData);
+            } else {
+                console.warn("Expected ride data to be an array, but got:", rideData);
+                setRides([]); // fallback to empty array
+            }
+        } catch (error) {
+            console.error("Failed to fetch rides", error);
+            setRides([]);
+        }
     }
 
     async function displayForegroundNotificationStopTrcaking() {
@@ -66,8 +82,8 @@ export default function HomeScreen({navigation}) {
         const requestPerms = async () => {
             const granted = await checkAndRequestPermissions();
             const userData = await getUserData();
-            
-            if(userData){
+
+            if (userData) {
                 setUserData(userData)
                 await getRides(userData.id);
             }
@@ -76,66 +92,114 @@ export default function HomeScreen({navigation}) {
             }
         };
         requestPerms();
-        const ws = new WebSocket('ws://192.168.44.253:8000/ws/location/');
-        ws.onopen = () => {
-            console.log('WebSocket connection opened');
 
-        };
-
-        ws.onmessage = (e) => {
-            console.log('Message from server:', e.data);
-        };
-
-        ws.onerror = (e) => {
-            console.log('WebSocket error:', e.message);
-        };
-
-        ws.onclose = (e) => {
-            console.log('WebSocket closed:', e.code, e.reason);
-        };
         createAndroidChannel();
     }, []);
 
-    // Start background tracking
-    const startBackgroundTracking = async () => {
-        if (isTracking || BackgroundJob.isRunning()) {
-            console.log('Tracking already running');
+    const establishWebsocket = () => {
+        if (ws.current) {
+            console.log('WebSocket already established');
             return;
         }
-        try {
-            // Clear any existing watcher
-            if (watchId.current) {
-                Geolocation.clearWatch(watchId.current);
-                watchId.current = null;
+        if (selectedRide) {
+            ws.current = new WebSocket(`${WS_BACKEND_URL}/ws/location/${selectedRide.id}/?user_id=${user.id}`);
+
+            ws.current.onopen = () => {
+                console.log('WebSocket connection opened');
+            };
+            ws.current.onerror = (e) => {
+                console.log('WebSocket error:', e.message);
+            };
+
+            ws.current.onclose = (e) => {
+                console.log('WebSocket closed:', e.code, e.reason);
+                ws.current = null;
+            };
+        }
+        else {
+            Alert.alert("Please select the ride that your gpoing to start ride")
+        }
+    };
+
+    const closeWebsocket = () => {
+        if (ws.current) {
+            ws.current.close();
+            ws.current = null;
+            console.log('WebSocket connection closed manually');
+        } else {
+            console.log('No WebSocket connection to close');
+        }
+    };
+
+    // Start background tracking
+    const startBackgroundTracking = async () => {
+        if (selectedRide) {
+            if (isTracking || BackgroundJob.isRunning()) {
+                console.log('Tracking already running');
+                return;
             }
-            setIsTracking(true);
-            await BackgroundJob.start(async () => {
-                console.log('Background job started');
-                watchId.current = watchMerchantPosition(
-                    (position) => watchMerchantPositionSuccess(position),
-                    (error) => watchMerchantPositionError(error)
-                );
-                console.log('Watcher active with ID:', watchId.current);
-                // Keep task alive
-                while (BackgroundJob.isRunning()) {
-                    await new Promise((resolve) => setTimeout(resolve, 1000));
-                }
-                console.log('Background task ended');
-                if (watchId.current !== null) {
+            try {
+                // Clear any existing watcher
+                establishWebsocket()
+                if (watchId.current) {
                     Geolocation.clearWatch(watchId.current);
-                    console.log('🧹 Cleared watcher ID at task end:', watchId.current);
                     watchId.current = null;
                 }
-            }, backgroundNotificationOption);
-            console.log('Background task initiated');
-        } catch (error) {
-            console.error('Error starting background job:', error);
-            setIsTracking(false);
+                setIsTracking(true);
+                await BackgroundJob.start(async () => {
+                    console.log('Background job started');
+                    watchId.current = watchMerchantPosition(
+                        (position) => {
+                            const { latitude, longitude } = position.coords;
+                            const timestamp = new Date().toISOString();
+
+                            console.log('New position:', latitude, longitude, timestamp);
+
+                            if (ws.current && ws.current.readyState === WebSocket.OPEN) {
+                                const payload = {
+                                    latitude,
+                                    longitude,
+                                    timestamp,
+                                };
+
+                                try {
+                                    ws.current.send(JSON.stringify(payload));
+                                    console.log(' Sent location to WebSocket:', payload);
+                                } catch (err) {
+                                    console.error(' WebSocket send error:', err);
+                                }
+                            } else {
+                                console.warn(' WebSocket is not open. Skipping send.');
+                            }
+                        },
+                        (error) => watchMerchantPositionError(error)
+                    );
+                    console.log('Watcher active with ID:', watchId.current);
+                    // Keep task alive
+                    while (BackgroundJob.isRunning()) {
+                        await new Promise((resolve) => setTimeout(resolve, 1000));
+                    }
+                    console.log('Background task ended');
+                    if (watchId.current !== null) {
+                        Geolocation.clearWatch(watchId.current);
+                        console.log('Cleared watcher ID at task end:', watchId.current);
+                        watchId.current = null;
+                    }
+                }, backgroundNotificationOption);
+                console.log('Background task initiated');
+            } catch (error) {
+                console.error('Error starting background job:', error);
+                setIsTracking(false);
+            }
+        }
+        else {
+            Alert.alert("Please select the ride that your gpoing to start ride")
         }
     };
 
     // Stop background tracking
     const stopBackgroundTracking = async () => {
+        closeWebsocket()
         displayForegroundNotificationStopTrcaking();
         if (BackgroundJob.isRunning()) {
             await BackgroundJob.stop();
@@ -172,7 +236,7 @@ export default function HomeScreen({navigation}) {
     }, []);
 
     return (
-        <View style={styles.container}>
+        <ScrollView style={styles.container}>
             <View style={styles.header}>
                 <TouchableOpacity>
                     <Image source={{ uri: user?.profileUrl }} style={styles.profileIcon} />
@@ -197,7 +261,27 @@ export default function HomeScreen({navigation}) {
                     {'\n'}• This helps keep your ride status updated on the Connect carpooling platform.
                 </Text>
             </View>
-
+            <View style={styles.ridesContainer}>
+                <Text style={styles.sectionTitle}>Select Ride to Track</Text>
+                {rides.length === 0 ? (
+                    <Text style={styles.noRidesText}>No rides available</Text>
+                ) : (
+                    rides.map((ride) => (
+                        <TouchableOpacity
+                            key={ride.id}
+                            style={[
+                                styles.rideCard,
+                                selectedRide?.id === ride.id && styles.selectedRideCard
+                            ]}
+                            onPress={() => setSelectedRide(ride)}
+                        >
+                            <Text style={styles.rideText}>From: {ride.from}</Text>
+                            <Text style={styles.rideText}>To: {ride.to}</Text>
+                            <Text style={styles.rideText}>Date: {ride.date}</Text>
+                        </TouchableOpacity>
+                    ))
+                )}
+            </View>
             <View style={styles.buttonGroup}>
                 <TouchableOpacity
                     style={[styles.button, isTracking ? styles.buttonDisabled : styles.buttonActive]}
@@ -219,7 +303,7 @@ export default function HomeScreen({navigation}) {
             <Text style={styles.footerText}>
                 Your privacy is our priority. Location data is only used to provide real-time ride updates.
             </Text>
-        </View>
+        </ScrollView>
     );
 }
 
@@ -292,8 +376,41 @@ const styles = StyleSheet.create({
     },
     footerText: {
         marginTop: 40,
+        marginBottom: 40,
         color: '#777',
         fontSize: 12,
         textAlign: 'center',
     },
+    ridesContainer: {
+        marginTop: 30,
+        marginBottom: 30,
+    },
+    sectionTitle: {
+        fontSize: 18,
+        fontWeight: 'bold',
+        color: 'white',
+        marginBottom: 10,
+    },
+    rideCard: {
+        backgroundColor: '#1f1f1f',
+        padding: 15,
+        borderRadius: 10,
+        marginBottom: 10,
+        borderWidth: 1,
+        borderColor: '#333',
+    },
+    selectedRideCard: {
+        borderColor: '#28a745',
+        backgroundColor: '#2a2a2a',
+    },
+    rideText: {
+        color: '#ccc',
+        fontSize: 14,
+    },
+    noRidesText: {
+        color: '#777',
+        fontSize: 14,
+        fontStyle: 'italic',
+    },
+
 });

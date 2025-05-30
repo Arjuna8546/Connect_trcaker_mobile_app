@@ -1,9 +1,10 @@
 // axiosInstance.js
 import axios from 'axios';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import {HTTP_BACKEND_URL } from '@env';
 
 const axiosInstance = axios.create({
-  baseURL: 'http://192.168.44.253:8000/api/mobile/', // adjust base URL
+  baseURL: `${HTTP_BACKEND_URL}/api/mobile/`, 
   headers: {
     'Content-Type': 'application/json',
   },
@@ -32,7 +33,7 @@ axiosInstance.interceptors.response.use(
       originalRequest._retry = true;
       try {
         const refresh = await AsyncStorage.getItem('refresh');
-        const res = await axios.post('http://192.168.44.253:8000/api/mobile/token/refresh/', {
+        const res = await axios.post(`${HTTP_BACKEND_URL}/api/mobile/token/refresh/`, {
           refresh: refresh,
         });
 

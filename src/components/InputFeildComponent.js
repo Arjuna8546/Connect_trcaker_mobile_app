@@ -16,16 +16,18 @@ export default function InputFeildComponent({
       value={value}
       onChangeText={onChangeText}
       style={{
-        color: "white",
-        borderColor: "#555",
-        borderWidth: 1,
-        borderRadius: 10,
-        paddingHorizontal: 15,
-        paddingVertical: 12,
-        width: '70%',
-        fontSize: 16,
-        backgroundColor: '#222',
-      }}
+      color: "white",
+      borderColor: "#555",
+      borderWidth: 1,
+      borderRadius: 10,
+      paddingHorizontal: 15,
+      paddingVertical: 12,
+      width: '70%',
+      fontSize: 16,
+      backgroundColor: '#222',
+      alignSelf: 'center', 
+    }}
+
     />
   );
 }
